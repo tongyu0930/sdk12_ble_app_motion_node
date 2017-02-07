@@ -69,6 +69,7 @@ APP_TIMER_DEF(alarm_timer_id2);
 static bool 				want_scan 	= false;
 static bool 				first_time 	= true;
 static accel_values_t 		acc_values;
+static bool                 get_imu		= true;
 
 
 const ble_gap_adv_params_t m_adv_params =
@@ -222,14 +223,9 @@ static void app_timer_handler1(void * p_context)
 }
 
 
-static void app_timer_handler2(void * p_context)
+static void app_timer_handler2(void * p_context) // 网上说，因为timer handler interrupt和spi interrupt冲突了，建议还是把spi放到main里
 {
-	uint32_t err_code;
-
-	err_code = mpu_read_accel(&acc_values);
-	APP_ERROR_CHECK(err_code);
-	NRF_LOG_INFO("X: %06d   Y: %06d   Z: %06d\r\n", acc_values.x, acc_values.y, acc_values.z);
-	if(acc_values.x != 0){NRF_GPIO->OUT ^= (1 << 17);}
+	get_imu = true;
 }
 
 
@@ -505,6 +501,18 @@ int main(void)
 
     for (;; )
     {
+    	if(get_imu)
+    	{
+			err_code = mpu_read_accel(&acc_values);
+			APP_ERROR_CHECK(err_code);
+			NRF_LOG_INFO("X: %06d   Y: %06d   Z: %06d\r\n", acc_values.x, acc_values.y, acc_values.z);
+			if(acc_values.x != 0)
+			{
+				NRF_GPIO->OUT ^= (1 << 17);
+			}
+			get_imu = false;
+    	}
+
         if (NRF_LOG_PROCESS() == false)
         {
             power_manage();
