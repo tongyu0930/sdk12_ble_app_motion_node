@@ -35,6 +35,8 @@
 #include "nrf_gpio.h"
 #include "relay.h"
 #include "nrf_error.h"
+#include "nrf.h"
+#include "app_mpu.h"
 
 
 #define CENTRAL_LINK_COUNT       		0  /**< Number of central links used by the application. When changing this number remember to adjust the RAM settings*/
@@ -60,13 +62,13 @@
 
 #define APP_TIMER_PRESCALER             0   /**< Value of the RTC1 PRESCALER register. */
 #define APP_TIMER_OP_QUEUE_SIZE         4   /**< Size of timer operation queues. */
-#define ALARM_INTERVAL APP_TIMER_TICKS(100, APP_TIMER_PRESCALER)
-
-APP_TIMER_DEF(alarm_timer_id);
+APP_TIMER_DEF(alarm_timer_id1);
+APP_TIMER_DEF(alarm_timer_id2);
 
 
 static bool 				want_scan 	= false;
 static bool 				first_time 	= true;
+static accel_values_t 		acc_values;
 
 
 const ble_gap_adv_params_t m_adv_params =
@@ -183,7 +185,7 @@ void app_error_fault_handler(uint32_t id, uint32_t pc, uint32_t info)  //重写a
 
 
 //这是APP TIMER's handler
-static void app_timer_handler(void * p_context)
+static void app_timer_handler1(void * p_context)
 {
 	NRF_GPIO->OUT ^= (1 << 20);
 	uint32_t      err_code;
@@ -220,6 +222,17 @@ static void app_timer_handler(void * p_context)
 }
 
 
+static void app_timer_handler2(void * p_context)
+{
+	uint32_t err_code;
+
+	err_code = mpu_read_accel(&acc_values);
+	APP_ERROR_CHECK(err_code);
+	NRF_LOG_INFO("X: %06d   Y: %06d   Z: %06d\r\n", acc_values.x, acc_values.y, acc_values.z);
+	if(acc_values.x != 0){NRF_GPIO->OUT ^= (1 << 17);}
+}
+
+
 /**@brief Function for initializing the Advertising functionality.
  *
  * @details Encodes the required advertising data and passes it to the stack. Also builds a structure to be passed to the stack when starting advertising.
@@ -248,16 +261,6 @@ static void advertising_init(void)
     APP_ERROR_CHECK(err_code);
 
     //sd_ble_gap_adv_data_set(pp_data, sizeof(pp_data), NULL, 0); // 用这句话来躲避掉flag
-
-    // Initialize advertising parameters (used when starting advertising).
-//    memset(&m_adv_params, 0, sizeof(m_adv_params));													// 把结构体里的所有变量初始为0
-
-//    m_adv_params.type        					= BLE_GAP_ADV_TYPE_ADV_NONCONN_IND;					// Undirected advertisement.
-    //m_adv_params.p_peer_addr->addr_type 		= BLE_GAP_ADDR_TYPE_RANDOM_STATIC;
-//    m_adv_params.p_peer_addr					= NULL;	// 我觉得null是不是默认就是static的address？
-//    m_adv_params.fp          					= BLE_GAP_ADV_FP_ANY;
-//    m_adv_params.interval    					= NON_CONNECTABLE_ADV_INTERVAL;
-//    m_adv_params.timeout     					= APP_CFG_NON_CONN_ADV_TIMEOUT;
 }
 
 
@@ -311,7 +314,7 @@ void get_adv_data(ble_evt_t * p_ble_evt)
 					APP_ERROR_CHECK(err_code);
 				}
 
-				err_code = app_timer_stop(alarm_timer_id); // 每1000ms就触发一次handler
+				err_code = app_timer_stop(alarm_timer_id1); // 每1000ms就触发一次handler
 				APP_ERROR_CHECK(err_code);
 				first_time = true;
 				want_scan  = true;
@@ -396,7 +399,7 @@ void GPIOTE_IRQHandler(void)
 
         if(first_time)
         {
-			err_code = app_timer_start(alarm_timer_id, ALARM_INTERVAL, NULL); // 每1000ms就触发一次handler
+			err_code = app_timer_start(alarm_timer_id1, APP_TIMER_TICKS(100, APP_TIMER_PRESCALER), NULL); // 每100ms就触发一次handler
 			APP_ERROR_CHECK(err_code);
         }else
         {
@@ -411,7 +414,7 @@ void GPIOTE_IRQHandler(void)
 				APP_ERROR_CHECK(err_code);
 			}
 
-        	err_code = app_timer_stop(alarm_timer_id); // 每1000ms就触发一次handler
+        	err_code = app_timer_stop(alarm_timer_id1); // 每1000ms就触发一次handler
 			APP_ERROR_CHECK(err_code);
 			first_time = true;
 			want_scan  = true;
@@ -429,13 +432,7 @@ static void gpio_configure(void)
 								  (GPIO_PIN_CNF_INPUT_Connect << GPIO_PIN_CNF_INPUT_Pos) |
 								  (GPIO_PIN_CNF_PULL_Pullup   << GPIO_PIN_CNF_PULL_Pos);
 
-
 	nrf_delay_us(5000);																			// Do I have to delay?
-
-	NRF_GPIOTE->CONFIG[0] = (GPIOTE_CONFIG_MODE_Task       << GPIOTE_CONFIG_MODE_Pos)     |
-							(GPIOTE_CONFIG_OUTINIT_High    << GPIOTE_CONFIG_OUTINIT_Pos)  |
-							(GPIOTE_CONFIG_POLARITY_Toggle << GPIOTE_CONFIG_POLARITY_Pos) |
-							(19                            << GPIOTE_CONFIG_PSEL_Pos);			// 19 is the pin number for testing
 
 	NRF_GPIOTE->CONFIG[1] = (GPIOTE_CONFIG_MODE_Event      << GPIOTE_CONFIG_MODE_Pos)     |
 							(GPIOTE_CONFIG_OUTINIT_Low     << GPIOTE_CONFIG_OUTINIT_Pos)  |
@@ -449,6 +446,22 @@ static void gpio_configure(void)
 	NVIC_SetPriority(GPIOTE_IRQn, APP_IRQ_PRIORITY_LOWEST);
 	NVIC_EnableIRQ(GPIOTE_IRQn); 											 					//declaration值得一看！！！有关IRQ
 }
+
+
+void mpu_setup(void)
+{
+    ret_code_t ret_code;
+    ret_code = mpu_init();
+    APP_ERROR_CHECK(ret_code); // Check for errors in return value
+
+    // Setup and configure the MPU with intial values
+    mpu_config_t p_mpu_config = MPU_DEFAULT_CONFIG(); // Load default values
+    p_mpu_config.smplrt_div = 19;   // Change sampelrate. Sample Rate = Gyroscope Output Rate / (1 + SMPLRT_DIV). 19 gives a sample rate of 50Hz
+    p_mpu_config.accel_config.afs_sel = AFS_2G; // Set accelerometer full scale range to 2G
+    ret_code = mpu_config(&p_mpu_config); // Configure the MPU with above values
+    APP_ERROR_CHECK(ret_code); // Check for errors in return value
+}
+
 
 /**
  * @brief Function for application main entry.
@@ -474,12 +487,20 @@ int main(void)
      *
      *  SCHEDULER_FUNC: should be set to false when scheduler is not used
      */
-    err_code = app_timer_create(&alarm_timer_id, APP_TIMER_MODE_REPEATED, app_timer_handler);
+    err_code = app_timer_create(&alarm_timer_id1, APP_TIMER_MODE_REPEATED, app_timer_handler1);
     APP_ERROR_CHECK(err_code);
+    err_code = app_timer_create(&alarm_timer_id2, APP_TIMER_MODE_REPEATED, app_timer_handler2);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = app_timer_start(alarm_timer_id2, APP_TIMER_TICKS(400, APP_TIMER_PRESCALER), NULL); // 每200ms就触发一次handler
+    APP_ERROR_CHECK(err_code);
+
 
     ble_stack_init();
     advertising_init();
     gpio_configure(); // 注意gpio和timesync是相对独立的，同步时钟本质上不需要gpio
+
+    mpu_setup();
 
 
     for (;; )
