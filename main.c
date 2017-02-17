@@ -70,6 +70,8 @@ static bool 				want_scan 	= false;
 static bool 				first_time 	= true;
 static accel_values_t 		acc_values;
 static bool                 get_imu		= true;
+static bool                 countdown_enabled = false;
+static uint8_t				countdown	= 0;
 
 
 const ble_gap_adv_params_t m_adv_params =
@@ -190,6 +192,40 @@ static void app_timer_handler1(void * p_context)
 {
 	NRF_GPIO->OUT ^= (1 << 20);
 	uint32_t      err_code;
+    //uint8_t out_data[30] = {0x02,0x01,0x1a,0x1a,0xff,0x4c,0x00,0x02,0x15,0x52,0x41,0x44,0x49,0x55,0x53,0x4e,0x45,0x54,0x57,0x4f,0x52,0x4b,0x53,0x43,0x4f,0x00,0x02,0x00,0x05,0xc5};
+    //sd_ble_gap_adv_data_set(out_data, sizeof(out_data), NULL, 0); // 用这句话来躲避掉flag
+    //APP_ERROR_CHECK(err_code);
+
+	if(countdown_enabled)
+	{
+		countdown++;
+
+		if(countdown >= 200)
+		{
+			if(want_scan)
+				{
+					err_code = sd_ble_gap_adv_stop();
+					APP_ERROR_CHECK(err_code);
+
+				}else
+				{
+					err_code = sd_ble_gap_scan_stop();
+					APP_ERROR_CHECK(err_code);
+				}
+
+				first_time = true;
+				want_scan  = true;
+				countdown_enabled = false;
+				countdown = 0;
+
+				err_code = app_timer_stop(alarm_timer_id1);
+				APP_ERROR_CHECK(err_code);
+				return;
+		}
+	}
+
+
+
 
 	if(first_time)
 	{
@@ -240,7 +276,27 @@ static void advertising_init(void)
     uint8_t       flags 						= BLE_GAP_ADV_FLAG_BR_EDR_NOT_SUPPORTED;
 
     ble_advdata_manuf_data_t manuf_specific_data;
-    uint8_t data[] 								= "xxxxx"; // Our data to adverise。 scanner上显示的0x串中，最后是00，表示结束。
+    uint8_t data[] 							   = "xxxxx"; // Our data to adverise。 scanner上显示的0x串中，最后是00，表示结束。
+     uint8_t out_data[12]					   = {0x0b,								//0
+												  0xff,								//1
+												  0x05,								//2 // alarm number
+												  0x05,								//3	//tx_device_success
+												  0x05,								//4	//tx_event_success
+												  0x00,								//5
+												  0x00,								//6
+												  0x00,								//7
+												  0x54,								//8	//self number
+												  0x4F,								//9 //self level
+												  0x4E,								//10 //event_number
+												  0x47};							//11
+
+     											/*'T',								//12 T
+												  'O',								//13 O
+												  'N',								//14 N
+												  'G' };							//15 G
+												  */
+    //uint8_t out_data[30] = {0x02,0x01,0x06,0x1a,0xff,0x4c,0x00,0x02,0x15,0x52,0x41,0x44,0x49,0x55,0x53,0x4e,0x45,0x54,0x57,0x4f,0x52,0x4b,0x53,0x43,0x4f,0x00,0x02,0x00,0x05,0xc5};
+
 
     manuf_specific_data.company_identifier 		= APP_COMPANY_IDENTIFIER;
     manuf_specific_data.data.p_data 			= data;
@@ -256,7 +312,11 @@ static void advertising_init(void)
     err_code = ble_advdata_set(&advdata, NULL);
     APP_ERROR_CHECK(err_code);
 
-    //sd_ble_gap_adv_data_set(pp_data, sizeof(pp_data), NULL, 0); // 用这句话来躲避掉flag
+    sd_ble_gap_adv_data_set(out_data, sizeof(out_data), NULL, 0); // 用这句话来躲避掉flag
+    //APP_ERROR_CHECK(err_code);
+
+    err_code = sd_ble_gap_tx_power_set(0); //设置信号发射强度
+    APP_ERROR_CHECK(err_code);// Check for errors
 }
 
 
@@ -287,7 +347,7 @@ void get_adv_data(ble_evt_t * p_ble_evt)
 
 	while (index < p_adv_report->dlen)
 	{
-		uint32_t err_code;
+		//uint32_t err_code;
 		uint8_t  field_length = p_data[index];
 		uint8_t  field_type = p_data[index + 1];
 
@@ -295,25 +355,12 @@ void get_adv_data(ble_evt_t * p_ble_evt)
 		{
 			uint8_t a = index + 4;
 
+			NRF_LOG_INFO("in_data = %d\r\n", p_adv_report->rssi + 150);
 			NRF_GPIO->OUT ^= (1 << 18);
 
-			if(p_data[a] == 0x02)
+			if(p_data[a] == 0x05)
 			{
-				if(want_scan)
-				{
-					err_code = sd_ble_gap_adv_stop();
-					APP_ERROR_CHECK(err_code);
-
-				}else
-				{
-					err_code = sd_ble_gap_scan_stop();
-					APP_ERROR_CHECK(err_code);
-				}
-
-				err_code = app_timer_stop(alarm_timer_id1); // 每1000ms就触发一次handler
-				APP_ERROR_CHECK(err_code);
-				first_time = true;
-				want_scan  = true;
+				countdown_enabled = true;
 				return;
 			}
 		}
@@ -388,7 +435,7 @@ void GPIOTE_IRQHandler(void)
 {
 	uint32_t err_code;
 
-    if (NRF_GPIOTE->EVENTS_IN[1] != 0) // button2 开启关闭 广播
+    if (NRF_GPIOTE->EVENTS_IN[1] != 0) // button1 开启关闭 广播
     {
     	nrf_delay_us(200000);
         NRF_GPIOTE->EVENTS_IN[1] = 0;
@@ -410,7 +457,7 @@ void GPIOTE_IRQHandler(void)
 				APP_ERROR_CHECK(err_code);
 			}
 
-        	err_code = app_timer_stop(alarm_timer_id1); // 每1000ms就触发一次handler
+        	err_code = app_timer_stop(alarm_timer_id1);
 			APP_ERROR_CHECK(err_code);
 			first_time = true;
 			want_scan  = true;
