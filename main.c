@@ -49,12 +49,8 @@
 #define NON_CONNECTABLE_ADV_INTERVAL    MSEC_TO_UNITS(100, UNIT_0_625_MS) /**< The advertising interval for non-connectable advertisement (100 ms). This value can vary between 100ms to 10.24s). */
 #define APP_COMPANY_IDENTIFIER          0x0059  /**< Company identifier for Nordic Semiconductor ASA. as per www.bluetooth.org. */
 
-
-//不知道设置为0004和4000有什么区别，led看起来都闪的一样快。
-//#define SCAN_INTERVAL           0x00A0                          /**< Determines scan interval in units of 0.625 millisecond. */
-#define SCAN_INTERVAL           0x0800   //500ms //Scan interval or window is between 0x0004 and 0x4000 in 0.625ms units (2.5ms to 10.24s).
-//#define SCAN_WINDOW             0x0050                          /**< Determines scan window in units of 0.625 millisecond. */
-#define SCAN_WINDOW             0x0800   //The scanWindow shall be less than or equal to the scanInterval.Scan window between 0x0004 and 0x4000
+#define SCAN_INTERVAL           0x0040   //500ms //Scan interval or window is between 0x0004 and 0x4000 in 0.625ms units (2.5ms to 10.24s).
+#define SCAN_WINDOW             0x0040   //The scanWindow shall be less than or equal to the scanInterval.Scan window between 0x0004 and 0x4000
 #define SCAN_ACTIVE             0                               /**< If 1, performe active scanning (scan requests). */
 #define SCAN_SELECTIVE          0                               /**< If 1, ignore unknown devices (non whitelisted). */
 #define SCAN_TIMEOUT            0x0000
@@ -277,24 +273,28 @@ static void advertising_init(void)
 
     ble_advdata_manuf_data_t manuf_specific_data;
     uint8_t data[] 							   = "xxxxx"; // Our data to adverise。 scanner上显示的0x串中，最后是00，表示结束。
-     uint8_t out_data[12]					   = {0x0b,								//0
-												  0xff,								//1
-												  0x05,								//2 // alarm number
-												  0x05,								//3	//tx_device_success
-												  0x05,								//4	//tx_event_success
-												  0x00,								//5
-												  0x00,								//6
-												  0x00,								//7
-												  0x54,								//8	//self number
-												  0x4F,								//9 //self level
-												  0x4E,								//10 //event_number
-												  0x47};							//11
 
-     											/*'T',								//12 T
-												  'O',								//13 O
-												  'N',								//14 N
-												  'G' };							//15 G
-												  */
+
+
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',1,0,0,0,3,2,1};
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,2,1,0,9,59,2};
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',7,4,5,0,1,2,3};
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',3,4,5,0,1,2,3};
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',7,4,5,0,1,2,3};
+
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,4,9,0,0,0};
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,4,8,0,0,0};
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',2,5,2,0,3,2,9};
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',2,5,3,0,3,2,8};
+    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,12,9,0,0,0};
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,12,8,0,0,0};
+
+
+
+
+
+
+    // iBeacon
     //uint8_t out_data[30] = {0x02,0x01,0x06,0x1a,0xff,0x4c,0x00,0x02,0x15,0x52,0x41,0x44,0x49,0x55,0x53,0x4e,0x45,0x54,0x57,0x4f,0x52,0x4b,0x53,0x43,0x4f,0x00,0x02,0x00,0x05,0xc5};
 
 
