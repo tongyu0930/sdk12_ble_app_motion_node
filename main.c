@@ -44,22 +44,28 @@
 #define IS_SRVC_CHANGED_CHARACT_PRESENT 0 /**< 不懂Include or not the service_changed characteristic. if not enabled, the server's database cannot be changed for the lifetime of the device*/
 #define DEAD_BEEF                       0xDEADBEEF  /**< Value used as error code on stack dump, can be used to identify stack location on stack unwind. */
 
-
-
-
 #define APP_TIMER_PRESCALER             0   /**< Value of the RTC1 PRESCALER register. */
 #define APP_TIMER_OP_QUEUE_SIZE         4   /**< Size of timer operation queues. */
 APP_TIMER_DEF(alarm_timer_id1);
 APP_TIMER_DEF(alarm_timer_id2);
 
 
-static bool 				want_scan 	= false;
-static bool 				first_time 	= true;
-static accel_values_t 		acc_values;
-static bool                 get_imu		= true;
-static bool                 countdown_enabled = false;
-static uint8_t				countdown	= 0;
+#define     						SELF_NUMBER 		  2
+volatile static bool 				want_scan 			= false;
+volatile static bool 				alarm_event 		= false;
+volatile static bool 				begin 			= true;
+		 static accel_values_t 		acc_values;
+		 static bool                get_imu				= true;
+		 static uint8_t				advertising_count	= 0;
+		 static bool 				ACK 				= false;
+		 static uint8_t				alarm_count			= 0;
 
+static enum
+{
+    RELAY_NODE,
+	CENTER_NODE,
+	NONE
+} node_type;
 
 const ble_gap_adv_params_t m_adv_params =
   {
@@ -82,13 +88,11 @@ const ble_gap_scan_params_t m_scan_params =
   };
 
 
-
-
-
-void advertising_start(void);
-void scanning_start(void);
-
-
+static void advertising_start(void);
+static void scanning_start(void);
+static void mpu_setup(void);
+static void try_stop_advertising(void);
+static void start_loop(void);
 
 
 
@@ -178,42 +182,12 @@ static void app_timer_handler1(void * p_context)
 {
 	NRF_GPIO->OUT ^= (1 << 20);
 	uint32_t      err_code;
-    //uint8_t out_data[30] = {0x02,0x01,0x1a,0x1a,0xff,0x4c,0x00,0x02,0x15,0x52,0x41,0x44,0x49,0x55,0x53,0x4e,0x45,0x54,0x57,0x4f,0x52,0x4b,0x53,0x43,0x4f,0x00,0x02,0x00,0x05,0xc5};
-    //sd_ble_gap_adv_data_set(out_data, sizeof(out_data), NULL, 0); // 用这句话来躲避掉flag
-    //APP_ERROR_CHECK(err_code);
 
-	if(countdown_enabled)
-	{
-		countdown++;
-
-		if(countdown >= 200)	// 最长广播时间
-		{
-			if(want_scan)
-				{
-					err_code = sd_ble_gap_adv_stop();
-					APP_ERROR_CHECK(err_code);
-				}else
-				{
-					err_code = sd_ble_gap_scan_stop();
-					APP_ERROR_CHECK(err_code);
-				}
-
-				first_time = true;
-				want_scan  = true;
-				countdown_enabled = false;
-				countdown = 0;
-
-				err_code = app_timer_stop(alarm_timer_id1);
-				APP_ERROR_CHECK(err_code);
-				return;
-		}
-	}
-
-	if(first_time)
+	if(begin)
 	{
 		advertising_start();
 
-		first_time 	= false;
+		begin 	= false;
 		want_scan 	= true;
 	}else
 	{
@@ -232,12 +206,18 @@ static void app_timer_handler1(void * p_context)
 			err_code = sd_ble_gap_scan_stop();
 			APP_ERROR_CHECK(err_code);
 
+			alarm_count++;
+			advertising_count++;
+			uint8_t	alarm[10] = {0x09, 0xff,'T','O','N','G',0,0,alarm_count,SELF_NUMBER};
+			sd_ble_gap_adv_data_set(alarm, sizeof(alarm), NULL, 0);
 			advertising_start();
 
 			NRF_LOG_INFO("broadcasting\r\n");
 			want_scan = true;
 		}
 	}
+
+	try_stop_advertising();
 }
 
 
@@ -247,16 +227,15 @@ static void app_timer_handler2(void * p_context) // 网上说，因为timer hand
 }
 
 
-/**@brief Function for starting advertising.
- */
-void advertising_start(void)
+static void advertising_start(void)
 {
     uint32_t err_code;
     err_code = sd_ble_gap_adv_start(&m_adv_params);
     APP_ERROR_CHECK(err_code);
 }
 
-void scanning_start(void)
+
+static void scanning_start(void)
 {
     uint32_t err_code;
     err_code = sd_ble_gap_scan_start(&m_scan_params);
@@ -264,10 +243,9 @@ void scanning_start(void)
 }
 
 
-void get_adv_data(ble_evt_t * p_ble_evt)
+static void get_adv_data(ble_evt_t * p_ble_evt)
 {
 	uint32_t index = 0;
-
 	ble_gap_evt_t * p_gap_evt = &p_ble_evt->evt.gap_evt;
 	ble_gap_evt_adv_report_t * p_adv_report = &p_gap_evt->params.adv_report; // 这个report里还有peer地址，信号强度等可以利用的信息。
 	uint8_t *p_data = (uint8_t *) p_adv_report->data;
@@ -278,23 +256,80 @@ void get_adv_data(ble_evt_t * p_ble_evt)
 		uint8_t  field_length = p_data[index];
 		uint8_t  field_type = p_data[index + 1];
 
-		if (field_type == BLE_GAP_AD_TYPE_MANUFACTURER_SPECIFIC_DATA)
+		if ((field_type == BLE_GAP_AD_TYPE_MANUFACTURER_SPECIFIC_DATA) || (field_type == BLE_GAP_AD_TYPE_COMPLETE_LOCAL_NAME))
 		{
-			uint8_t a = index + 4;
-
-			NRF_LOG_INFO("in_data = %d\r\n", p_adv_report->rssi + 150);
-			NRF_GPIO->OUT ^= (1 << 18);
-
-			if(p_data[a] == 0x05)
+			uint8_t a = index+2;
+			/************************************************ check origin *********************************************************************/
+			if(!((p_data[a]== 'T') && (p_data[a+1]== 'O') && (p_data[a+2]== 'N') && (p_data[a+3]== 'G')))
 			{
-				countdown_enabled = true;
 				return;
 			}
+			/************************************************ check node type *********************************************************************/
+			node_type = NONE;
+
+			if(field_type == BLE_GAP_AD_TYPE_COMPLETE_LOCAL_NAME)
+			{
+				node_type = CENTER_NODE;
+			}else
+			{
+				if(p_data[a+4]== 0) // ALARM_NODE;
+				{
+					return;
+				}else
+				{
+					node_type = CENTER_NODE;
+				}
+			}
+			/************************************************ switch node type *********************************************************************/
+			switch(node_type)
+			{
+			case CENTER_NODE:
+				if((p_data[a+8] - 48) * 16 + (p_data[a+9] - 48) == SELF_NUMBER) // "TONG00" + "alarm node number"
+				{
+					ACK = true;
+				}
+				break;
+
+			case RELAY_NODE:
+				if(p_data[a+7] == SELF_NUMBER)
+				{
+					ACK = true;
+				}
+				break;
+
+			case NONE:
+				break;
+			}
+			return;
 		}
 		index += field_length + 1;
 	}
 }
 
+static void try_stop_advertising(void)
+{
+	uint32_t err_code;
+
+	if(((alarm_count >= 10) && (ACK == true)) || (advertising_count >= 40))
+	{
+		if(want_scan)
+		{
+			err_code = sd_ble_gap_adv_stop();
+			APP_ERROR_CHECK(err_code);
+
+		}else
+		{
+			err_code = sd_ble_gap_scan_stop();
+			APP_ERROR_CHECK(err_code);
+		}
+
+		err_code = app_timer_stop(alarm_timer_id1);
+		APP_ERROR_CHECK(err_code);
+		begin = true;
+		ACK = false;
+		alarm_event = false;
+	}
+}
 
 /**@brief Function for dispatching a BLE stack event to all modules with a BLE stack event handler.
  *
@@ -352,31 +387,40 @@ void GPIOTE_IRQHandler(void)
     	nrf_delay_us(200000);
         NRF_GPIOTE->EVENTS_IN[1] = 0;
 
-        if(first_time)
-        {
+        if(begin)
+		{
 			err_code = app_timer_start(alarm_timer_id1, APP_TIMER_TICKS(200, APP_TIMER_PRESCALER), NULL); // 每100ms就触发一次handler
 			APP_ERROR_CHECK(err_code);
-        }else
-        {
-        	if(want_scan)
-        	{
-        		err_code = sd_ble_gap_adv_stop();
+		}else
+		{
+			if(want_scan)
+			{
+				err_code = sd_ble_gap_adv_stop();
 				APP_ERROR_CHECK(err_code);
 
-        	}else
-        	{
-        		err_code = sd_ble_gap_scan_stop();
+			}else
+			{
+				err_code = sd_ble_gap_scan_stop();
 				APP_ERROR_CHECK(err_code);
 			}
 
-        	err_code = app_timer_stop(alarm_timer_id1);
+			err_code = app_timer_stop(alarm_timer_id1);
 			APP_ERROR_CHECK(err_code);
-			first_time = true;
-			want_scan  = true;
-        }
+			begin = true;
+		}
     }
 }
 
+static void start_loop(void)
+{
+	uint32_t err_code;
+
+	if(begin)
+	{
+		err_code = app_timer_start(alarm_timer_id1, APP_TIMER_TICKS(200, APP_TIMER_PRESCALER), NULL); // 每100ms就触发一次handler
+		APP_ERROR_CHECK(err_code);
+	}
+}
 
 static void gpio_configure(void)
 {
@@ -403,7 +447,7 @@ static void gpio_configure(void)
 }
 
 
-void mpu_setup(void)
+static void mpu_setup(void)
 {
     ret_code_t ret_code;
     ret_code = mpu_init();
@@ -455,20 +499,18 @@ int main(void)
 
 //    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,4,9,0,0,0};
 //    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,4,8,0,0,0};
-//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',2,5,2,0,3,2,9};
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',2,6,7,0,8,2,7};
 //    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',2,5,3,0,3,2,8};
-	uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,12,9,0,0,0};
 //    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,12,8,0,0,0};
 
-	// iBeacon
-//	uint8_t out_data[30] = {0x02,0x01,0x06,0x1a,0xff,0x4c,0x00,0x02,0x15,0x52,0x41,0x44,0x49,0x55,0x53,0x4e,0x45,0x54,0x57,0x4f,0x52,0x4b,0x53,0x43,0x4f,0x00,0x02,0x00,0x05,0xc5};
+//	sd_ble_gap_adv_data_set(out_data, sizeof(out_data), NULL, 0); // 用这句话来躲避掉flag
 
-	sd_ble_gap_adv_data_set(out_data, sizeof(out_data), NULL, 0); // 用这句话来躲避掉flag
 	err_code = sd_ble_gap_tx_power_set(0);
 	APP_ERROR_CHECK(err_code);
     gpio_configure(); // 注意gpio和timesync是相对独立的，同步时钟本质上不需要gpio
     mpu_setup();
 
+//    advertising_start();
 
     for (;; )
     {
@@ -481,6 +523,16 @@ int main(void)
 			{
 				NRF_GPIO->OUT ^= (1 << 17);
 			}
+
+			if(acc_values.x > 1000)
+			{
+				if(alarm_event == false)
+				{
+					alarm_event = true;
+					start_loop();
+				}
+			}
+
 			get_imu = false;
     	}
 
