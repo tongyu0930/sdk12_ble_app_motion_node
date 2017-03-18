@@ -40,20 +40,11 @@
 
 
 #define CENTRAL_LINK_COUNT       		0  /**< Number of central links used by the application. When changing this number remember to adjust the RAM settings*/
-#define PERIPHERAL_LINK_COUNT    		0  /**< Number of peripheral links used by the application. When changing this number remember to adjust the RAM settings*/
+#define PERIPHERAL_LINK_COUNT    		1  /**< Number of peripheral links used by the application. When changing this number remember to adjust the RAM settings*/
 #define IS_SRVC_CHANGED_CHARACT_PRESENT 0 /**< 不懂Include or not the service_changed characteristic. if not enabled, the server's database cannot be changed for the lifetime of the device*/
 #define DEAD_BEEF                       0xDEADBEEF  /**< Value used as error code on stack dump, can be used to identify stack location on stack unwind. */
 
 
-#define APP_CFG_NON_CONN_ADV_TIMEOUT    0 /**< Time for which the device must be advertising in non-connectable mode (in seconds). 0 disables timeout. */
-#define NON_CONNECTABLE_ADV_INTERVAL    MSEC_TO_UNITS(100, UNIT_0_625_MS) /**< The advertising interval for non-connectable advertisement (100 ms). This value can vary between 100ms to 10.24s). */
-#define APP_COMPANY_IDENTIFIER          0x0059  /**< Company identifier for Nordic Semiconductor ASA. as per www.bluetooth.org. */
-
-#define SCAN_INTERVAL           0x0040   //500ms //Scan interval or window is between 0x0004 and 0x4000 in 0.625ms units (2.5ms to 10.24s).
-#define SCAN_WINDOW             0x0040   //The scanWindow shall be less than or equal to the scanInterval.Scan window between 0x0004 and 0x4000
-#define SCAN_ACTIVE             0                               /**< If 1, performe active scanning (scan requests). */
-#define SCAN_SELECTIVE          0                               /**< If 1, ignore unknown devices (non whitelisted). */
-#define SCAN_TIMEOUT            0x0000
 
 
 #define APP_TIMER_PRESCALER             0   /**< Value of the RTC1 PRESCALER register. */
@@ -72,22 +63,22 @@ static uint8_t				countdown	= 0;
 
 const ble_gap_adv_params_t m_adv_params =
   {
-	.type        					= BLE_GAP_ADV_TYPE_ADV_NONCONN_IND,					// Undirected advertisement.
+	.type        					= BLE_GAP_ADV_TYPE_ADV_IND,					// Undirected advertisement.
 	//.p_peer_addr->addr_type 		= BLE_GAP_ADDR_TYPE_RANDOM_STATIC,
 	.p_peer_addr					= NULL,												// 我觉得null是不是默认就是static的address？
 	.fp          					= BLE_GAP_ADV_FP_ANY,
-	.interval    					= NON_CONNECTABLE_ADV_INTERVAL,						// 虽然这个最小值时100ms，但是你可以通过timer以更快的频率启动关闭广播。
-	.timeout     					= APP_CFG_NON_CONN_ADV_TIMEOUT
+	.interval    					= 0x0020,						// 虽然这个最小值时100ms，但是你可以通过timer以更快的频率启动关闭广播。
+	.timeout     					= 0
   };
 
 const ble_gap_scan_params_t m_scan_params =
   {
-    .active      					= SCAN_ACTIVE,
-    .use_whitelist   				= SCAN_SELECTIVE,
+    .active      					= 0,
+    .use_whitelist   				= 0,
     .adv_dir_report 				= 0,
-    .interval    					= SCAN_INTERVAL,
-    .window      					= SCAN_WINDOW,
-    .timeout     					= SCAN_TIMEOUT
+    .interval    					= 0x0040,
+    .window      					= 0x0040,
+    .timeout     					= 0
   };
 
 
@@ -183,7 +174,6 @@ void app_error_fault_handler(uint32_t id, uint32_t pc, uint32_t info)  //重写a
 }
 
 
-//这是APP TIMER's handler
 static void app_timer_handler1(void * p_context)
 {
 	NRF_GPIO->OUT ^= (1 << 20);
@@ -196,13 +186,12 @@ static void app_timer_handler1(void * p_context)
 	{
 		countdown++;
 
-		if(countdown >= 200)
+		if(countdown >= 200)	// 最长广播时间
 		{
 			if(want_scan)
 				{
 					err_code = sd_ble_gap_adv_stop();
 					APP_ERROR_CHECK(err_code);
-
 				}else
 				{
 					err_code = sd_ble_gap_scan_stop();
@@ -219,9 +208,6 @@ static void app_timer_handler1(void * p_context)
 				return;
 		}
 	}
-
-
-
 
 	if(first_time)
 	{
@@ -258,65 +244,6 @@ static void app_timer_handler1(void * p_context)
 static void app_timer_handler2(void * p_context) // 网上说，因为timer handler interrupt和spi interrupt冲突了，建议还是把spi放到main里
 {
 	get_imu = true;
-}
-
-
-/**@brief Function for initializing the Advertising functionality.
- *
- * @details Encodes the required advertising data and passes it to the stack. Also builds a structure to be passed to the stack when starting advertising.
- */
-static void advertising_init(void)
-{
-    uint32_t      err_code;
-    ble_advdata_t advdata;
-    uint8_t       flags 						= BLE_GAP_ADV_FLAG_BR_EDR_NOT_SUPPORTED;
-
-    ble_advdata_manuf_data_t manuf_specific_data;
-    uint8_t data[] 							   = "xxxxx"; // Our data to adverise。 scanner上显示的0x串中，最后是00，表示结束。
-
-
-
-//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',1,0,0,0,3,2,1};
-//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,2,1,0,9,59,2};
-//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',7,4,5,0,1,2,3};
-//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',3,4,5,0,1,2,3};
-//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',7,4,5,0,1,2,3};
-
-//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,4,9,0,0,0};
-//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,4,8,0,0,0};
-//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',2,5,2,0,3,2,9};
-//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',2,5,3,0,3,2,8};
-    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,12,9,0,0,0};
-//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,12,8,0,0,0};
-
-
-
-
-
-
-    // iBeacon
-    //uint8_t out_data[30] = {0x02,0x01,0x06,0x1a,0xff,0x4c,0x00,0x02,0x15,0x52,0x41,0x44,0x49,0x55,0x53,0x4e,0x45,0x54,0x57,0x4f,0x52,0x4b,0x53,0x43,0x4f,0x00,0x02,0x00,0x05,0xc5};
-
-
-    manuf_specific_data.company_identifier 		= APP_COMPANY_IDENTIFIER;
-    manuf_specific_data.data.p_data 			= data;
-    manuf_specific_data.data.size   			= sizeof(data);
-
-    // Build and set advertising data.
-    memset(&advdata, 0, sizeof(advdata));
-
-    advdata.name_type             				= BLE_ADVDATA_NO_NAME;
-    advdata.flags                				= flags;
-    advdata.p_manuf_specific_data 				= &manuf_specific_data;
-
-    err_code = ble_advdata_set(&advdata, NULL);
-    APP_ERROR_CHECK(err_code);
-
-    sd_ble_gap_adv_data_set(out_data, sizeof(out_data), NULL, 0); // 用这句话来躲避掉flag
-    //APP_ERROR_CHECK(err_code);
-
-    err_code = sd_ble_gap_tx_power_set(0); //设置信号发射强度
-    APP_ERROR_CHECK(err_code);// Check for errors
 }
 
 
@@ -381,18 +308,6 @@ static void ble_evt_dispatch(ble_evt_t * p_ble_evt)
 }
 
 
-/**@brief Function for dispatching a system event to interested modules.
- *
- * @details This function is called from the System event interrupt handler after a system event has been received.
- *
- * @param[in] sys_evt  System stack event.
- */
-static void sys_evt_dispatch(uint32_t sys_evt)														//这个function到底何时被call？
-{
-    //ts_on_sys_evt(sys_evt);
-}
-
-
 /**@brief Function for initializing the BLE stack.
  *
  * @details Initializes the SoftDevice and the BLE event interrupt.
@@ -415,9 +330,6 @@ static void ble_stack_init(void)
     APP_ERROR_CHECK(err_code);
 
     err_code = softdevice_ble_evt_handler_set(ble_evt_dispatch); 									// Register with the SoftDevice handler module for BLE events.
-    APP_ERROR_CHECK(err_code);
-
-    err_code = softdevice_sys_evt_handler_set(sys_evt_dispatch); 									// Register with the SoftDevice handler module for System (SOC) events.
     APP_ERROR_CHECK(err_code);
 }
 
@@ -442,7 +354,7 @@ void GPIOTE_IRQHandler(void)
 
         if(first_time)
         {
-			err_code = app_timer_start(alarm_timer_id1, APP_TIMER_TICKS(100, APP_TIMER_PRESCALER), NULL); // 每100ms就触发一次handler
+			err_code = app_timer_start(alarm_timer_id1, APP_TIMER_TICKS(200, APP_TIMER_PRESCALER), NULL); // 每100ms就触发一次handler
 			APP_ERROR_CHECK(err_code);
         }else
         {
@@ -534,15 +446,27 @@ int main(void)
     APP_ERROR_CHECK(err_code);
     err_code = app_timer_create(&alarm_timer_id2, APP_TIMER_MODE_REPEATED, app_timer_handler2);
     APP_ERROR_CHECK(err_code);
-
     err_code = app_timer_start(alarm_timer_id2, APP_TIMER_TICKS(400, APP_TIMER_PRESCALER), NULL); // 每200ms就触发一次handler
     APP_ERROR_CHECK(err_code);
 
 
     ble_stack_init();
-    advertising_init();
-    gpio_configure(); // 注意gpio和timesync是相对独立的，同步时钟本质上不需要gpio
 
+
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,4,9,0,0,0};
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,4,8,0,0,0};
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',2,5,2,0,3,2,9};
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',2,5,3,0,3,2,8};
+	uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,12,9,0,0,0};
+//    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,12,8,0,0,0};
+
+	// iBeacon
+//	uint8_t out_data[30] = {0x02,0x01,0x06,0x1a,0xff,0x4c,0x00,0x02,0x15,0x52,0x41,0x44,0x49,0x55,0x53,0x4e,0x45,0x54,0x57,0x4f,0x52,0x4b,0x53,0x43,0x4f,0x00,0x02,0x00,0x05,0xc5};
+
+	sd_ble_gap_adv_data_set(out_data, sizeof(out_data), NULL, 0); // 用这句话来躲避掉flag
+	err_code = sd_ble_gap_tx_power_set(0);
+	APP_ERROR_CHECK(err_code);
+    gpio_configure(); // 注意gpio和timesync是相对独立的，同步时钟本质上不需要gpio
     mpu_setup();
 
 
