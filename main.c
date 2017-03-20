@@ -22,6 +22,7 @@
 // 最后在删减makefile
 #include <stdbool.h>
 #include <stdint.h>
+#include <math.h>
 #include "ble_advdata.h"
 #include "nordic_common.h"
 #include "softdevice_handler.h"
@@ -50,7 +51,11 @@ APP_TIMER_DEF(alarm_timer_id1);
 APP_TIMER_DEF(alarm_timer_id2);
 
 
-#define     						SELF_NUMBER 		  2
+#define     						SELF_NUMBER 		  	2
+#define     						ALARM_SENDING_TIME		5
+#define     						ALARM_SENDING_TIME_MAX	30
+#define     						ADV_INTERVAL			500
+#define     						IMU_GET_INTERVAL		10
 volatile static bool 				want_scan 			= false;
 volatile static bool 				alarm_event 		= false;
 volatile static bool 				begin 			= true;
@@ -277,14 +282,14 @@ static void get_adv_data(ble_evt_t * p_ble_evt)
 					return;
 				}else
 				{
-					node_type = CENTER_NODE;
+					node_type = RELAY_NODE;
 				}
 			}
 			/************************************************ switch node type *********************************************************************/
 			switch(node_type)
 			{
 			case CENTER_NODE:
-				if((p_data[a+8] - 48) * 16 + (p_data[a+9] - 48) == SELF_NUMBER) // "TONG00" + "alarm node number"
+				if((p_data[a+10] - 48) * 16 + (p_data[a+11] - 48) == SELF_NUMBER) // "TONG0100" + "alarm node number"
 				{
 					ACK = true;
 				}
@@ -310,7 +315,7 @@ static void try_stop_advertising(void)
 {
 	uint32_t err_code;
 
-	if(((alarm_count >= 10) && (ACK == true)) || (advertising_count >= 40))
+	if(((alarm_count >= ALARM_SENDING_TIME) && (ACK == true)) || (advertising_count >= ALARM_SENDING_TIME_MAX))
 	{
 		if(want_scan)
 		{
@@ -328,6 +333,8 @@ static void try_stop_advertising(void)
 		begin = true;
 		ACK = false;
 		alarm_event = false;
+		advertising_count = 0;
+		alarm_count = 0;
 	}
 }
 
@@ -417,7 +424,7 @@ static void start_loop(void)
 
 	if(begin)
 	{
-		err_code = app_timer_start(alarm_timer_id1, APP_TIMER_TICKS(200, APP_TIMER_PRESCALER), NULL); // 每100ms就触发一次handler
+		err_code = app_timer_start(alarm_timer_id1, APP_TIMER_TICKS(ADV_INTERVAL, APP_TIMER_PRESCALER), NULL); // 每100ms就触发一次handler
 		APP_ERROR_CHECK(err_code);
 	}
 }
@@ -490,11 +497,16 @@ int main(void)
     APP_ERROR_CHECK(err_code);
     err_code = app_timer_create(&alarm_timer_id2, APP_TIMER_MODE_REPEATED, app_timer_handler2);
     APP_ERROR_CHECK(err_code);
-    err_code = app_timer_start(alarm_timer_id2, APP_TIMER_TICKS(400, APP_TIMER_PRESCALER), NULL); // 每200ms就触发一次handler
+    err_code = app_timer_start(alarm_timer_id2, APP_TIMER_TICKS(IMU_GET_INTERVAL, APP_TIMER_PRESCALER), NULL); // 每200ms就触发一次handler
     APP_ERROR_CHECK(err_code);
 
 
     ble_stack_init();
+
+	err_code = sd_ble_gap_tx_power_set(-20);
+	APP_ERROR_CHECK(err_code);
+    gpio_configure(); // 注意gpio和timesync是相对独立的，同步时钟本质上不需要gpio
+    mpu_setup();
 
 
 //    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,4,9,0,0,0};
@@ -504,12 +516,6 @@ int main(void)
 //    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,12,8,0,0,0};
 
 //	sd_ble_gap_adv_data_set(out_data, sizeof(out_data), NULL, 0); // 用这句话来躲避掉flag
-
-	err_code = sd_ble_gap_tx_power_set(0);
-	APP_ERROR_CHECK(err_code);
-    gpio_configure(); // 注意gpio和timesync是相对独立的，同步时钟本质上不需要gpio
-    mpu_setup();
-
 //    advertising_start();
 
     for (;; )
@@ -523,8 +529,8 @@ int main(void)
 			{
 				NRF_GPIO->OUT ^= (1 << 17);
 			}
-
-			if(acc_values.x > 1000)
+			int32_t value = sqrt((acc_values.x)*(acc_values.x) + (acc_values.y)*(acc_values.y) + (acc_values.z)*(acc_values.z));
+			if(value > 40000)
 			{
 				if(alarm_event == false)
 				{
