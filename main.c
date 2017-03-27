@@ -487,7 +487,12 @@ int main(void)
     bool angle = false;
     uint16_t angle_count = 0;
     uint16_t cosine_count = 0;
-    uint32_t haha = 0;
+    int32_t cali_x = 0;
+    int32_t cali_y = 0;
+    int32_t cali_z = 0;
+    int16_t x = 0;
+    int16_t y = 0;
+    int16_t z = 0;
     uint8_t count = 0;
     uint16_t g_relative = 0;
     int32_t v = 0;
@@ -495,7 +500,7 @@ int main(void)
     bool 	cali = true;
     uint32_t v_relative_threshold = 0; // m/s
     uint32_t rss_relative_threshold = 0; // 2.8*g
-    uint8_t cosine = 0;
+    int16_t cosine = 0;
 
     err_code = NRF_LOG_INIT(NULL);
     APP_ERROR_CHECK(err_code);
@@ -535,24 +540,31 @@ int main(void)
 				NRF_GPIO->OUT ^= (1 << 17);
 			}
 
-			uint16_t value = sqrt((acc_values.x)*(acc_values.x) + (acc_values.y-112)*(acc_values.y-112) + (acc_values.z+560)*(acc_values.z+560));
+
 
 			if(cali)
 			{
 				cali_count++;
-				haha += value;
+				cali_x += acc_values.x;
+				cali_y += acc_values.y - 112;
+				cali_z += acc_values.z + 560;
 				if(cali_count == 200)
 				{
 					cali = false;
-					g_relative = haha/200;
+					x = cali_x/200;
+					y = cali_y/200;
+					z = cali_z/200;
+					g_relative = sqrt(x*x+y*y+z*z);
 
-					g_relative = 8300;
+//					g_relative = 8300;
 					v_relative_threshold = V_THRESHOLD * g_relative;
 					rss_relative_threshold = RSS_THRESHOLD * g_relative;
 					NRF_LOG_INFO("g: %06d\r\n", g_relative);
 				}
 			}else
 			{
+				uint16_t value = sqrt((acc_values.x)*(acc_values.x) + (acc_values.y-112)*(acc_values.y-112) + (acc_values.z+560)*(acc_values.z+560));
+
 				count++;
 				if(count == 4) // 50Hz
 				{
@@ -584,13 +596,13 @@ int main(void)
 				}
 
 
-				if(impact && speed)
+				if(impact || speed)
 				{
 					angle_count++;
 
-					if(angle_count >= 600)
+					if(angle_count >= 599)
 					{
-						if(cosine_count >= 300) // 400*0.75
+						if(cosine_count >= 299) // 400*0.75
 						{
 							angle = true;
 						}else
@@ -602,15 +614,12 @@ int main(void)
 						angle_count = 0;
 					}
 
-					if(angle_count >= 200)
+					if(angle_count >= 199)
 					{
-						if(acc_values.x > 0)
+						cosine = (10 * (x*acc_values.x + y*(acc_values.y - 112) + z*(acc_values.z + 560))) / (g_relative * value);
+						if(((unsigned)cosine < 5) || (cosine < 0))
 						{
-							cosine = (10*acc_values.x)/g_relative;
-							if(cosine < 5)
-							{
-								cosine_count++;
-							}
+							cosine_count++;
 						}
 					}
 				}
