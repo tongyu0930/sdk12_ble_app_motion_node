@@ -55,7 +55,9 @@ APP_TIMER_DEF(alarm_timer_id2);
 #define     						ALARM_SENDING_TIME		5
 #define     						ALARM_SENDING_TIME_MAX	30
 #define     						ADV_INTERVAL			500
-#define     						IMU_GET_INTERVAL		10
+#define     						IMU_GET_INTERVAL		5
+#define     						V_THRESHOLD				7 //0.7 // m/s
+#define     						RSS_THRESHOLD			28//2.8 // 2.8*g
 volatile static bool 				want_scan 			= false;
 volatile static bool 				alarm_event 		= false;
 volatile static bool 				begin 			= true;
@@ -78,7 +80,7 @@ const ble_gap_adv_params_t m_adv_params =
 	//.p_peer_addr->addr_type 		= BLE_GAP_ADDR_TYPE_RANDOM_STATIC,
 	.p_peer_addr					= NULL,												// 我觉得null是不是默认就是static的address？
 	.fp          					= BLE_GAP_ADV_FP_ANY,
-	.interval    					= 0x0020,						// 虽然这个最小值时100ms，但是你可以通过timer以更快的频率启动关闭广播。
+	.interval    					= 0x0020, // 20 ms+ random delay(0-10ms)						// 虽然这个最小值时100ms，但是你可以通过timer以更快的频率启动关闭广播。
 	.timeout     					= 0
   };
 
@@ -87,8 +89,8 @@ const ble_gap_scan_params_t m_scan_params =
     .active      					= 0,
     .use_whitelist   				= 0,
     .adv_dir_report 				= 0,
-    .interval    					= 0x0040,
-    .window      					= 0x0040,
+    .interval    					= 0x0040,	//1 second
+    .window      					= 0x0040, //0x0030 is 30ms
     .timeout     					= 0
   };
 
@@ -250,6 +252,10 @@ static void scanning_start(void)
 
 static void get_adv_data(ble_evt_t * p_ble_evt)
 {
+	NRF_GPIO->OUT ^= (1 << 18);
+	NRF_LOG_INFO("TTT\r\n");
+	return;
+
 	uint32_t index = 0;
 	ble_gap_evt_t * p_gap_evt = &p_ble_evt->evt.gap_evt;
 	ble_gap_evt_adv_report_t * p_adv_report = &p_gap_evt->params.adv_report; // 这个report里还有peer地址，信号强度等可以利用的信息。
@@ -462,8 +468,8 @@ static void mpu_setup(void)
 
     // Setup and configure the MPU with intial values
     mpu_config_t p_mpu_config = MPU_DEFAULT_CONFIG(); // Load default values
-    p_mpu_config.smplrt_div = 19;   // Change sampelrate. Sample Rate = Gyroscope Output Rate / (1 + SMPLRT_DIV). 19 gives a sample rate of 50Hz
-    p_mpu_config.accel_config.afs_sel = AFS_2G; // Set accelerometer full scale range to 2G
+    p_mpu_config.smplrt_div = 4;   // Change sampelrate. Sample Rate = Gyroscope Output Rate / (1 + SMPLRT_DIV). 19 gives a sample rate of 50Hz
+    p_mpu_config.accel_config.afs_sel = AFS_4G; // Set accelerometer full scale range to 2G
     ret_code = mpu_config(&p_mpu_config); // Configure the MPU with above values
     APP_ERROR_CHECK(ret_code); // Check for errors in return value
 }
@@ -475,34 +481,33 @@ static void mpu_setup(void)
 int main(void)
 {
     uint32_t err_code;
+    int32_t acc_relative = 0;
+    bool speed = false;
+    bool impact = false;
+    bool angle = false;
+    uint16_t angle_count = 0;
+    uint16_t cosine_count = 0;
+    uint32_t haha = 0;
+    uint8_t count = 0;
+    uint16_t g_relative = 0;
+    int32_t v = 0;
+    uint8_t cali_count = 0;
+    bool 	cali = true;
+    uint32_t v_relative_threshold = 0; // m/s
+    uint32_t rss_relative_threshold = 0; // 2.8*g
+    uint8_t cosine = 0;
 
     err_code = NRF_LOG_INIT(NULL);
     APP_ERROR_CHECK(err_code);
     NRF_LOG_INFO("###################### System Started ####################\r\n");
-
     APP_TIMER_INIT(APP_TIMER_PRESCALER, APP_TIMER_OP_QUEUE_SIZE, false); //(0,4,false)
-    /*
-     *  PRESCALER: will be written to the RTC1 PRESCALER register. This determines the time resolution of the timer,
-     *  and thus the amount of time it can count before it wrap around. On the nRF52 the RTC is a 24-bit counter with
-     *  a 12 bit prescaler that run on the 32.768 LFCLK. The counter increment frequency (tick rate) fRTC [kHz] = 32.768/(PRESCALER+1).
-     *  For example, a prescaler value of 0 means that the tick rate or time resolution is 32.768 kHz * 1/(0+1) = 32.768 kHz
-     *  and the timer will wrap around every (2^24) * 1/32.768 kHz = 512 s.
-     *
-     *  OP_QUEUES_SIZE: determines the maximum number of events that can be queued. Let's say you are calling the API function several
-     *  times in a row to start a single shot timer, this determines how many times you can have queued before the queue gets full.
-     *
-     *  SCHEDULER_FUNC: should be set to false when scheduler is not used
-     */
     err_code = app_timer_create(&alarm_timer_id1, APP_TIMER_MODE_REPEATED, app_timer_handler1);
     APP_ERROR_CHECK(err_code);
     err_code = app_timer_create(&alarm_timer_id2, APP_TIMER_MODE_REPEATED, app_timer_handler2);
     APP_ERROR_CHECK(err_code);
     err_code = app_timer_start(alarm_timer_id2, APP_TIMER_TICKS(IMU_GET_INTERVAL, APP_TIMER_PRESCALER), NULL); // 每200ms就触发一次handler
     APP_ERROR_CHECK(err_code);
-
-
     ble_stack_init();
-
 	err_code = sd_ble_gap_tx_power_set(-20);
 	APP_ERROR_CHECK(err_code);
     gpio_configure(); // 注意gpio和timesync是相对独立的，同步时钟本质上不需要gpio
@@ -514,31 +519,114 @@ int main(void)
 //    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',2,6,7,0,8,2,7};
 //    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',2,5,3,0,3,2,8};
 //    uint8_t out_data[13]					   = {0x0c,0xff,'T','O','N','G',0,0,12,8,0,0,0};
-
-//	sd_ble_gap_adv_data_set(out_data, sizeof(out_data), NULL, 0); // 用这句话来躲避掉flag
+//    sd_ble_gap_adv_data_set(out_data, sizeof(out_data), NULL, 0); // 用这句话来躲避掉flag
 //    advertising_start();
+//    scanning_start();
 
     for (;; )
     {
-    	if(get_imu)
+    	if(get_imu && !alarm_event) //200 Hz
     	{
 			err_code = mpu_read_accel(&acc_values);
 			APP_ERROR_CHECK(err_code);
-			NRF_LOG_INFO("X: %06d   Y: %06d   Z: %06d\r\n", acc_values.x, acc_values.y, acc_values.z);
+//			NRF_LOG_INFO("X: %06d   Y: %06d   Z: %06d\r\n", acc_values.x, acc_values.y, acc_values.z);
 			if(acc_values.x != 0)
 			{
 				NRF_GPIO->OUT ^= (1 << 17);
 			}
-			int32_t value = sqrt((acc_values.x)*(acc_values.x) + (acc_values.y)*(acc_values.y) + (acc_values.z)*(acc_values.z));
-			if(value > 40000)
+
+			uint16_t value = sqrt((acc_values.x)*(acc_values.x) + (acc_values.y-112)*(acc_values.y-112) + (acc_values.z+560)*(acc_values.z+560));
+
+			if(cali)
 			{
-				if(alarm_event == false)
+				cali_count++;
+				haha += value;
+				if(cali_count == 200)
 				{
-					alarm_event = true;
-					start_loop();
+					cali = false;
+					g_relative = haha/200;
+
+					g_relative = 8300;
+					v_relative_threshold = V_THRESHOLD * g_relative;
+					rss_relative_threshold = RSS_THRESHOLD * g_relative;
+					NRF_LOG_INFO("g: %06d\r\n", g_relative);
+				}
+			}else
+			{
+				count++;
+				if(count == 4) // 50Hz
+				{
+					count = 0;
+
+					acc_relative += (g_relative - value);
+
+					if((acc_relative > 0) && ((unsigned)acc_relative > 100))
+					{
+						v += acc_relative*2; //0.020 s
+
+						if((unsigned)v > v_relative_threshold*1000/981)
+						{
+							speed = true;
+							NRF_LOG_INFO("velocity: %09d\r\n", value);
+						}
+					}else
+					{
+						v = 0;
+					}
+					acc_relative = 0;
+				}
+
+
+				if(value*10 > rss_relative_threshold)
+				{
+					impact = true;
+					NRF_LOG_INFO("impact\r\n");
+				}
+
+
+				if(impact && speed)
+				{
+					angle_count++;
+
+					if(angle_count >= 600)
+					{
+						if(cosine_count >= 300) // 400*0.75
+						{
+							angle = true;
+						}else
+						{
+							impact = false;
+							speed = false;
+						}
+						cosine_count = 0;
+						angle_count = 0;
+					}
+
+					if(angle_count >= 200)
+					{
+						if(acc_values.x > 0)
+						{
+							cosine = (10*acc_values.x)/g_relative;
+							if(cosine < 5)
+							{
+								cosine_count++;
+							}
+						}
+					}
+				}
+
+				if(speed && impact && angle)
+				{
+					if(alarm_event == false)
+					{
+						alarm_event = true;
+						impact = false;
+						speed = false;
+						angle = false;
+						start_loop();
+					}
 				}
 			}
-
 			get_imu = false;
     	}
 
